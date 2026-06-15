@@ -1,5 +1,7 @@
 import math
 import hashlib
+import json
+import pickle
 from typing import List
 
 
@@ -85,3 +87,47 @@ class CountingBloomFilter:
 
     def reset(self) -> None:
         self.counters = [0] * self.num_counters
+
+    def to_dict(self) -> dict:
+        return {
+            "expected_items": self.expected_items,
+            "false_positive_rate": self.false_positive_rate,
+            "counter_bits": self.counter_bits,
+            "max_counter": self.max_counter,
+            "num_counters": self.num_counters,
+            "num_hashes": self.num_hashes,
+            "counters": list(self.counters)
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CountingBloomFilter":
+        cbf = cls(
+            expected_items=data["expected_items"],
+            false_positive_rate=data["false_positive_rate"],
+            counter_bits=data["counter_bits"]
+        )
+        cbf.max_counter = data["max_counter"]
+        cbf.num_counters = data["num_counters"]
+        cbf.num_hashes = data["num_hashes"]
+        cbf.counters = list(data["counters"])
+        return cbf
+
+    def save(self, filepath: str) -> None:
+        with open(filepath, 'wb') as f:
+            pickle.dump(self.to_dict(), f)
+
+    @classmethod
+    def load(cls, filepath: str) -> "CountingBloomFilter":
+        with open(filepath, 'rb') as f:
+            data = pickle.load(f)
+        return cls.from_dict(data)
+
+    def save_json(self, filepath: str) -> None:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(self.to_dict(), f)
+
+    @classmethod
+    def load_json(cls, filepath: str) -> "CountingBloomFilter":
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return cls.from_dict(data)

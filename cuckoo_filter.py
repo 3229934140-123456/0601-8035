@@ -1,6 +1,8 @@
 import math
 import hashlib
 import random
+import json
+import pickle
 from typing import List, Optional, Tuple
 
 
@@ -17,9 +19,13 @@ class CuckooFilter:
         self.bucket_size = bucket_size
         self.max_kicks = max_kicks
 
-        num_buckets = self._next_power_of_two(max(1, capacity // bucket_size))
+        raw_buckets = (capacity + bucket_size - 1) // bucket_size
+        num_buckets = self._next_power_of_two(raw_buckets)
+        while num_buckets * bucket_size < capacity:
+            num_buckets <<= 1
         self.num_buckets = num_buckets
         self.capacity = num_buckets * bucket_size
+        self._requested_capacity = capacity
 
         self.buckets: List[List[Optional[int]]] = [
             [None] * bucket_size for _ in range(num_buckets)
@@ -91,13 +97,20 @@ class CuckooFilter:
             self.size += 1
             return True
 
-        cur_idx = i1 if random.random() < 0.5 else i2
+        undo_log: List[Tuple[int, int, Optional[int]]] = []
+
+        start_idx = i1 if random.random() < 0.5 else i2
+        cur_idx = start_idx
         cur_fp = fp
 
-        for _ in range(self.max_kicks):
+        success = False
+
+        for kick_step in range(self.max_kicks):
             bucket = self.buckets[cur_idx]
             slot_idx = random.randrange(len(bucket))
             evicted_fp = bucket[slot_idx]
+
+            undo_log.append((cur_idx, slot_idx, evicted_fp))
             bucket[slot_idx] = cur_fp
 
             cur_fp = evicted_fp
@@ -105,11 +118,17 @@ class CuckooFilter:
 
             slot = self._find_empty_slot(cur_idx)
             if slot is not None:
+                undo_log.append((cur_idx, slot, None))
                 self.buckets[cur_idx][slot] = cur_fp
                 self.size += 1
-                return True
+                success = True
+                break
 
-        return False
+        if not success:
+            for b_idx, s_idx, orig_val in reversed(undo_log):
+                self.buckets[b_idx][s_idx] = orig_val
+
+        return success
 
     def contains(self, item: str) -> bool:
         i1, i2, fp = self._get_indices_and_fingerprint(item)
@@ -151,3 +170,56 @@ class CuckooFilter:
     def reset(self) -> None:
         self.buckets = [[None] * self.bucket_size for _ in range(self.num_buckets)]
         self.size = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "requested_capacity": self._requested_capacity,
+            "fingerprint_bits": self.fingerprint_bits,
+            "bucket_size": self.bucket_size,
+            "max_kicks": self.max_kicks,
+            "num_buckets": self.num_buckets,
+            "capacity": self.capacity,
+            "size": self.size,
+            "buckets": [
+                [slot if slot is not None else 0 for slot in bucket]
+                for bucket in self.buckets
+            ]
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CuckooFilter":
+        cf = cls(
+            capacity=data["requested_capacity"],
+            fingerprint_bits=data["fingerprint_bits"],
+            bucket_size=data["bucket_size"],
+            max_kicks=data["max_kicks"]
+        )
+        cf.num_buckets = data["num_buckets"]
+        cf.capacity = data["capacity"]
+        cf.size = data["size"]
+        cf._requested_capacity = data["requested_capacity"]
+        cf.buckets = [
+            [slot if slot != 0 else None for slot in bucket]
+            for bucket in data["buckets"]
+        ]
+        return cf
+
+    def save(self, filepath: str) -> None:
+        with open(filepath, 'wb') as f:
+            pickle.dump(self.to_dict(), f)
+
+    @classmethod
+    def load(cls, filepath: str) -> "CuckooFilter":
+        with open(filepath, 'rb') as f:
+            data = pickle.load(f)
+        return cls.from_dict(data)
+
+    def save_json(self, filepath: str) -> None:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(self.to_dict(), f)
+
+    @classmethod
+    def load_json(cls, filepath: str) -> "CuckooFilter":
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return cls.from_dict(data)
